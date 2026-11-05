@@ -9,6 +9,8 @@ import {
 import {RestartGate} from "./restart-gate.mjs?v=20261006e";
 import {createSoundtrack} from "./music.mjs?v=20261006e";
 import {offlineStatus} from "./offline.mjs?v=20261103a";
+import {SpriteBank, blockSpriteName, blockRenderState} from "./sprites.mjs?v=20261106a";
+import {createSfx} from "./sfx.mjs?v=20261106a";
 
 const canvas = document.querySelector("#game");
 const ctx = canvas.getContext("2d", {alpha: false});
@@ -56,7 +58,40 @@ const bodyTrails = new Map();
 const bodyPositions = new Map();
 const pendingScores = [];
 const scorePopups = [];
+const burstEffects = [];    // expanding sprite ghosts on burst
+const popEffects = [];      // bubble pop rings
+const shotKindById = new Map();  // body id -> "sball" | "fball"
 const soundtrack = createSoundtrack(document, window);
+const sprites = new SpriteBank("assets");
+const sfx = createSfx({volume: .8});
+let assetsReady = false;
+
+// Chain estimate for the burst fanfare: the original pitches se_c1 by
+// max(min(group chain, 8)) across the frame's contacts. The observation does
+// not carry group chains for block bursts, so we approximate with the burst
+// size of the frame (exact for bubble pops via the event value).
+let frameBurstCount = 0;
+
+async function loadAssets() {
+  try {
+    await Promise.all([
+      sprites.load(),
+      sfx.preload(["buble02", "buble03", "cursor3", "puu89", "decide3",
+        "decide10", "decide12", "call07", "power14"]),
+    ]);
+    assetsReady = true;
+    dirty = true;
+  } catch (_) { /* vector fallback rendering stays available */ }
+}
+void loadAssets();
+
+// The AudioContext must be created from a user gesture; the first pointer
+// press on the canvas also unlocks the sfx engine alongside the soundtrack.
+function unlockAudio() {
+  sfx.unlock();
+}
+window.addEventListener("pointerdown", unlockAudio, {once: true});
+window.addEventListener("keydown", unlockAudio, {once: true});
 
 const restartGate = new RestartGate((pending) => {
   if (ui.runtimeLoading) ui.runtimeLoading.hidden = !pending;
@@ -143,12 +178,15 @@ function acceptSnapshot(next, force = false) {
     bodyPositions.clear();
     pendingScores.length = 0;
     scorePopups.length = 0;
+    burstEffects.length = 0;
+    popEffects.length = 0;
+    shotKindById.clear();
     trailTick = -1;
   }
   if (next.observation.tick !== trailTick) {
     const active = new Set();
     for (const body of next.observation.bodies) {
-      bodyPositions.set(body.id, {x: body.x, y: body.y});
+      bodyPositions.set(body.id, body);
       if (!hasActivatedTrail(body)) continue;
       active.add(body.id);
       const trail = bodyTrails.get(body.id) || [];
@@ -346,8 +384,70 @@ function fillBody(body, size, color, pose, alpha = 1) {
   ctx.restore();
 }
 
+// Original background selection, reversed from the Field background changer
+// (0x405740..): normal starts on back1, moves to back2 once the music state
+// reaches 4, and to back3 above 40000 points; metsu uses the back1_ex family.
+function backgroundName(state) {
+  if (gameMode === "metsu") {
+    if (state.score > 100000) return "back1_ex3";
+    if (state.score > 20000) return "back1_ex2";
+    return "back1_ex";
+  }
+  if (state.score > 40000) return "back3";
+  if (state.level >= 9) return "back2";
+  return "back1";
+}
+
+function drawBodySprite(body, pose, now) {
+  const metsu = gameMode === "metsu";
+  const state = blockRenderState(body, metsu);
+
+  // Projectiles: sball (weak) / fball (strong), tracked from shot events.
+  if (body.kind === "projectile") {
+    const name = shotKindById.get(body.id) ||
+      (Math.abs(body.vy || 0) >= 375 ? "fball" : "sball");
+    const size = sprites.size(name);
+    sprites.draw(ctx, name, pose.x, pose.y, {
+      scale: size.w ? body.size / size.w : 1,
+      angle: pose.angle || 0,
+      alpha: state.alpha,
+      bright: 255,
+    });
+    return;
+  }
+
+  // Special orb: the original special piece is a 24px circle (cir sprites
+  // are exactly 24x24) that cycles its colour while it waits.
+  if (body.kind === "bonus") {
+    const cycle = Math.floor(now / 400) % 5;
+    sprites.draw(ctx, `cir0${cycle}`, pose.x, pose.y, {
+      scale: 1, angle: pose.angle || 0, alpha: 255, bright: state.bright,
+    });
+    return;
+  }
+
+  const name = blockSpriteName(body, metsu);
+  if (!sprites.has(name)) return;   // vector fallback below
+  const natural = sprites.size(name);
+  const scale = natural.w ? body.size / natural.w : 1;
+  sprites.draw(ctx, name, pose.x, pose.y, {
+    scale, angle: pose.angle || 0, alpha: state.alpha, bright: state.bright,
+  });
+  // Anim 2 (grouped or popping): the glow pass — an additive copy of the
+  // sprite, matching the original's additive anim layer.
+  if (state.anim === 2) {
+    sprites.draw(ctx, name, pose.x, pose.y, {
+      scale, angle: pose.angle || 0, alpha: 150, bright: 255, additive: true,
+    });
+  }
+}
+
 function drawBody(body, now) {
   const size = Math.max(2, body.size);
+  if (assetsReady && sprites.size("box00").w) {
+    drawBodySprite(body, body, now);
+    return;
+  }
   const color = colorFor(body, now);
   if (hasActivatedTrail(body)) {
     const trail = bodyTrails.get(body.id) || [];
@@ -384,7 +484,14 @@ function drawBody(body, now) {
   // gray squares in reference footage are projectiles, not dead blocks.
 }
 
-function drawBackdrop() {
+function drawBackdrop(state) {
+  if (assetsReady) {
+    const name = backgroundName(state || {score: 0, level: 1});
+    if (sprites.has(name)) {
+      sprites.draw(ctx, name, 320, 240, {});
+      return;
+    }
+  }
   ctx.fillStyle = "#0c1517";
   ctx.fillRect(0, 0, 640, 480);
 }
@@ -481,16 +588,54 @@ function drawHud(state) {
   }
 
   const digits = String(state.score).padStart(8, "0");
-  cachedStrip(scoreStrip, digits, (c) => {
-    c.textAlign = "center";
+  const metsuLayout = gameMode === "metsu";
+  // In Metsu the score relocates to the left side (beside the vertical life
+  // gauge), smaller and left-aligned, matching the original layout. The cache
+  // key is namespaced by mode so a mode switch always re-renders the strip.
+  cachedStrip(scoreStrip, (metsuLayout ? "m:" : "n:") + digits, (c) => {
     c.textBaseline = "middle";
-    c.font = "900 26px Georgia, serif";
-    c.strokeStyle = "#681a38";
-    c.lineWidth = 5;
-    c.strokeText(digits, 320, 462);
-    c.fillStyle = "#eee0a4";
-    c.fillText(digits, 320, 462);
+    if (metsuLayout) {
+      c.textAlign = "left";
+      c.font = "900 22px Georgia, serif";
+      c.strokeStyle = "#2a1640";
+      c.lineWidth = 4;
+      c.strokeText(digits, 78, 462);
+      c.fillStyle = "#eee0a4";
+      c.fillText(digits, 78, 462);
+    } else {
+      c.textAlign = "center";
+      c.font = "900 26px Georgia, serif";
+      c.strokeStyle = "#681a38";
+      c.lineWidth = 5;
+      c.strokeText(digits, 320, 462);
+      c.fillStyle = "#eee0a4";
+      c.fillText(digits, 320, 462);
+    }
   });
+}
+
+// Score popups use the original ranking_num_ex digit strip (10 cells of
+// 27px), rising one pixel per update for 100 updates like the Number class.
+const POPUP_DIGIT_W = 27;
+const POPUP_DIGIT_H = 33;
+
+function drawPopupDigits(value, x, y, alpha) {
+  if (!assetsReady || !sprites.has("ranking_num_ex")) return false;
+  const image = sprites.variant("ranking_num_ex", 255);
+  if (!image) return false;
+  const text = String(value);
+  const total = text.length * POPUP_DIGIT_W;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  for (let i = 0; i < text.length; i++) {
+    const digit = text.charCodeAt(i) - 48;
+    if (digit < 0 || digit > 9) continue;
+    ctx.drawImage(image, digit * POPUP_DIGIT_W, 0, POPUP_DIGIT_W, POPUP_DIGIT_H,
+      x - total / 2 + i * POPUP_DIGIT_W, y - POPUP_DIGIT_H / 2,
+      POPUP_DIGIT_W, POPUP_DIGIT_H);
+  }
+  ctx.restore();
+  return true;
 }
 
 function drawScorePopups(now) {
@@ -502,8 +647,10 @@ function drawScorePopups(now) {
       continue;
     }
     const rise = 42 * (1 - (1 - progress) ** 2);
+    const alpha = 1 - progress;
+    if (drawPopupDigits(popup.value, popup.x, popup.y - rise, alpha)) continue;
     ctx.save();
-    ctx.globalAlpha = 1 - progress;
+    ctx.globalAlpha = alpha;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.font = "900 26px Georgia, serif";
@@ -517,7 +664,74 @@ function drawScorePopups(now) {
   }
 }
 
+// Burst effect: the original clones the block sprite into an effect object
+// that expands and fades (state 5, kind 6, bright 48). We mirror that with an
+// additive sprite ghost plus a few ptcl particles.
+const BURST_EFFECT_MS = 340;
+const PARTICLE_COUNT = 5;
+
+function drawBurstEffects(now) {
+  for (let index = burstEffects.length - 1; index >= 0; index--) {
+    const effect = burstEffects[index];
+    const progress = (now - effect.startedAt) / BURST_EFFECT_MS;
+    if (progress >= 1) {
+      burstEffects.splice(index, 1);
+      continue;
+    }
+    if (effect.sprite && sprites.has(effect.sprite)) {
+      sprites.draw(ctx, effect.sprite, effect.x, effect.y, {
+        scale: effect.scale * (1 + .55 * progress),
+        angle: effect.angle, alpha: 255 * (1 - progress),
+        bright: 255, additive: true,
+      });
+    }
+    if (sprites.has("ptcl_a")) {
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        const angle = effect.angle + i * (Math.PI * 2 / PARTICLE_COUNT) +
+          progress * 1.8;
+        const distance = effect.size * (.5 + .9 * progress);
+        sprites.draw(ctx, "ptcl_a",
+          effect.x + Math.cos(angle) * distance,
+          effect.y + Math.sin(angle) * distance, {
+            scale: .5, angle, alpha: 220 * (1 - progress),
+            bright: 255, additive: true,
+          });
+      }
+    }
+  }
+  for (let index = popEffects.length - 1; index >= 0; index--) {
+    const effect = popEffects[index];
+    const progress = (now - effect.startedAt) / 260;
+    if (progress >= 1) {
+      popEffects.splice(index, 1);
+      continue;
+    }
+    ctx.save();
+    ctx.globalAlpha = .8 * (1 - progress);
+    ctx.lineWidth = 3 * (1 - progress) + 1;
+    ctx.strokeStyle = "#eafcff";
+    ctx.beginPath();
+    ctx.arc(effect.x, effect.y, effect.size / 2 + 14 * progress, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 function drawWalls(state) {
+  if (assetsReady && sprites.has("field_l")) {
+    const f = state.field;
+    const thick = 16;
+    const blank = gameMode === "metsu" ? 30 : 40;
+    const cy = f.y + f.height / 2;
+    // Sprite sizes: field_l/r 20x380, field_t 460x10, field_b 460x60.
+    // The walls visually hug the physics fixtures (clone-validated centers).
+    sprites.draw(ctx, "field_l", f.x + thick / 2, cy, {});
+    sprites.draw(ctx, "field_r", f.x + f.width + thick, cy, {});
+    sprites.draw(ctx, "field_t", f.x + f.width / 2 + thick / 2, f.y, {});
+    sprites.draw(ctx, "field_b", f.x + f.width / 2 + thick / 2,
+      f.y + f.height + blank + 30, {});
+    return;
+  }
   const f = state.field;
   const thick = 16;
   const blank = gameMode === "metsu" ? 30 : 40;
@@ -570,54 +784,109 @@ function interpolatedBodies(now) {
 let dirty = true;
 
 function draw(now) {
-  if (!dirty && !snapshot?.running && scorePopups.length === 0) {
+  if (!dirty && !snapshot?.running && scorePopups.length === 0 &&
+      burstEffects.length === 0 && popEffects.length === 0) {
     requestAnimationFrame(draw);
     return;
   }
   dirty = false;
-  drawBackdrop();
+  const state = snapshot?.observation;
+  drawBackdrop(state);
   if (snapshot) {
-    const state = snapshot.observation;
     drawWalls(state);
     const bodies = interpolatedBodies(now);
     (isSortedById(bodies) ? bodies : [...bodies].sort((a, b) => a.id - b.id))
       .forEach((body) => drawBody(body, now));
+    drawBurstEffects(now);
     drawScorePopups(now);
     drawHud(state);
   }
   if (aim.visible) {
-    ctx.save();
-    ctx.strokeStyle = "#ece8dd";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.arc(aim.x, aim.y, 9, 0, Math.PI * 2);
-    ctx.moveTo(aim.x - 15, aim.y); ctx.lineTo(aim.x - 5, aim.y);
-    ctx.moveTo(aim.x + 5, aim.y); ctx.lineTo(aim.x + 15, aim.y);
-    ctx.moveTo(aim.x, aim.y - 15); ctx.lineTo(aim.x, aim.y - 5);
-    ctx.moveTo(aim.x, aim.y + 5); ctx.lineTo(aim.x, aim.y + 15);
-    ctx.stroke();
-    ctx.restore();
+    if (assetsReady && sprites.has("pointer")) {
+      // The original cursor sprite is additive art: black pixels turn
+      // invisible, the white arrow glows (DX_BLENDMODE_ADD).
+      sprites.draw(ctx, "pointer", aim.x, aim.y, {additive: true});
+    } else {
+      ctx.save();
+      ctx.strokeStyle = "#ece8dd";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(aim.x, aim.y, 9, 0, Math.PI * 2);
+      ctx.moveTo(aim.x - 15, aim.y); ctx.lineTo(aim.x - 5, aim.y);
+      ctx.moveTo(aim.x + 5, aim.y); ctx.lineTo(aim.x + 15, aim.y);
+      ctx.moveTo(aim.x, aim.y - 15); ctx.lineTo(aim.x, aim.y - 5);
+      ctx.moveTo(aim.x, aim.y + 5); ctx.lineTo(aim.x, aim.y + 15);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
   requestAnimationFrame(draw);
 }
 
 function processEvents(events) {
+  frameBurstCount = 0;
   for (const event of events) {
     if (event.sequence <= lastEvent) continue;
     lastEvent = event.sequence;
+    switch (event.kind_name) {
+      case "shot_fired":
+        shotKindById.set(event.a, event.value === 1 ? "fball" : "sball");
+        break;
+      case "bubble_popped":
+        sfx.bubblePop(event.value);
+        popEffects.push({
+          x: bodyPositions.get(event.a)?.x || 320,
+          y: bodyPositions.get(event.a)?.y || 240,
+          size: 58, startedAt: performance.now(),
+        });
+        break;
+      case "rotten":
+        sfx.rotPenalty();
+        break;
+      case "projectile_contact":
+        sfx.hitTick();
+        break;
+      case "projectile_hit":
+        if (event.value >= 2) sfx.hitCrush();
+        else sfx.hitTick();
+        break;
+      case "level_changed":
+        sfx.levelUp();
+        showToast(`LEVEL ${event.value}`);
+        break;
+      case "game_over":
+        sfx.gameOver();
+        break;
+    }
     if (event.kind_name === "score_changed" && event.value > 0) {
       pendingScores.push(event);
     } else if (event.kind_name === "cleared" &&
                event.detail === "normal burst actor teardown") {
+      frameBurstCount += 1;
       const index = pendingScores.findIndex(score => score.tick === event.tick);
+      const body = bodyPositions.get(event.a);
       if (index >= 0) {
         const [score] = pendingScores.splice(index, 1);
-        const position = bodyPositions.get(event.a) || {x: 320, y: 240};
-        scorePopups.push({...position, value: score.value, startedAt: performance.now()});
+        const position = body || {x: 320, y: 240};
+        scorePopups.push({x: position.x, y: position.y,
+          value: score.value, startedAt: performance.now()});
+      }
+      if (body) {
+        const metsu = gameMode === "metsu";
+        const sprite = blockSpriteName(body, metsu);
+        const natural = sprites.size(sprite);
+        burstEffects.push({
+          x: body.x, y: body.y, sprite,
+          scale: natural.w ? body.size / natural.w : 1,
+          angle: body.angle || 0, size: body.size,
+          startedAt: performance.now(),
+        });
       }
     }
-    if (event.kind_name === "level_changed") showToast(`LEVEL ${event.value}`);
   }
+  // The burst fanfare plays once per contact frame in the original
+  // (after the whole traversal), keyed on the frame's best chain.
+  if (frameBurstCount > 0) sfx.burst(frameBurstCount - 1);
 }
 
 function showReplayPosition(frame, totalFrames) {
@@ -772,8 +1041,9 @@ ui.fastForward.addEventListener("pointerdown", (event) => {
 });
 function syncMute() {
   const muted = soundtrack.isMuted();
+  sfx.setMuted(muted);
   ui.mute.setAttribute("aria-pressed", String(muted));
-  const label = muted ? "Unmute music" : "Mute music";
+  const label = muted ? "Unmute sound" : "Mute sound";
   ui.mute.setAttribute("aria-label", label);
   ui.mute.title = label;
 }
