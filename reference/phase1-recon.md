@@ -226,3 +226,40 @@ ScenePlay::init / children init. Block-family loaders unchanged. `Number.Number`
 shared helper; run in order b→g). Raw console dumps of the key functions are
 in the commit history of this file's generation session; the scripts are
 idempotent against `reference/game/irisu.exe`.
+
+## Addendum (same session): ScenePlay game step & life gauge
+
+**m11 `+0x2c` real body = 0x40992c..0x409d90** (0x464 bytes — beware first-ret
+truncation; the `je` at 0x409967 continues into it):
+
+```
+if (life [0x4428e4] <= 0) { m26 gameover; return; }
+if (tx.Input::+0x2c().bool) { SaveData->+0x4c([0x442919]); next=new SceneTitle; return; }
+if (tx.Input::+0x28().bool) { this->dispose(+0x24); this->init(+0x20); }   // RESTART
+walls(+0x10)->+0x20();                       // Field per-frame
+this->vt[+0x64]()                            // m25 PHYSICS: b2d_step(dt*substeps)
+field(+0x2c)->x = (f32)tx.Input::+0x50();    // mouseX  — paddle follows mouse
+field(+0x2c)->y = (f32)tx.Input::+0x54();    // mouseY
+spawnConfig = fn_416268(args, ...)           // INI keys @0x434528/38/48/...
+... life clamp >= 0; HUD modi submits ×4 (0x409c6d..0x409d0f) ...
+```
+
+**m26 `0x40adc4` = game over**: sound by name via `tx.Cache::+0x24(name,-1)`
+(name differs when `SaveData::+0x48()` or level `[0x4428c8] >= 100`);
+`state(+0x30)=1` freezes the dispatcher; live-only: `SaveData::+0x24(score,
+chain, level, block_size)` registers the result, `+0x54`/`+0x68` save, then
+`tx.Input::+0x6c(formatted name, score, chain, level, seed[+0x38])` **writes
+the replay file**; finally `walls(+0x10)->+0x2c()`.
+
+**Life gauge `[0x4428e4]`**:
+- init from arg/INI (`0x4094c8`), zeroed by main loop when `tx.Input::poll()`
+  returns 0 (input-mode abort, e.g. replay exhausted → forces game over)
+- `+= [0x436a38]` per clear event in normal mode (`0x403317`, block-pool fn)
+- `-= [0x436a1c]` when a block's `+0xcc == 4` → `+0xc8 = 3` (`0x403519`) —
+  damage event *(inferred: block reached the bottom)*
+- level-up bonus via m10 `0x4098fc` (`[this+0xd8][2] * [0x436a38]`)
+- clamped `>= 0` in the step (`0x409ba5`), then drawn (HUD)
+
+tx.Input getters so far: `+0x50` mouseX, `+0x54` mouseY, `+0x28` restart flag,
+`+0x2c` quit flag, `+0x4c` X-click, `+0x48/+0x58` fast-forward, `+0x60` poll,
+`+0x64` replay-playback init, `+0x68` live-input init, `+0x6c` replay write.
