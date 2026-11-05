@@ -4,6 +4,33 @@
 
 const BRIGHT_LEVELS = new Set([128, 164, 196, 200, 255]);
 
+// The original loads the 24-bit normal-mode sprites through DxLib with
+// SetTransColor(0,0,0): exact black is the transparency key. The triangle and
+// circle sheets carry their outside-the-shape padding in black, and the metsu
+// ex_ family ships real alpha instead — without the key the padding paints
+// black halves over the background doodles. The triangle sheets shade their
+// padding into a very dark tint of the block color, so they key on a
+// brightness threshold instead of the exact color.
+const BLACK_KEYED = /^(?:box|tri|cir)\d\d$|^ex_(?:box|tri|cir)\d\d_\d\d$|^[sf]ball$/;
+const THRESHOLD_KEYED = /^tri\d\d$/;
+
+function keyBlackPixels(image, threshold = 0) {
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const c = canvas.getContext("2d");
+  c.drawImage(image, 0, 0);
+  const data = c.getImageData(0, 0, canvas.width, canvas.height);
+  const px = data.data;
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3] === 0) continue;
+    const bright = Math.max(px[i], px[i + 1], px[i + 2]);
+    if (bright <= threshold) px[i + 3] = 0;
+  }
+  c.putImageData(data, 0, 0);
+  return canvas;
+}
+
 export class SpriteBank {
   constructor(base = "assets") {
     this.base = base;
@@ -22,7 +49,8 @@ export class SpriteBank {
       await Promise.all(names.map(name => new Promise(resolve => {
         const image = new Image();
         image.onload = () => {
-          this.images.set(name, image);
+          this.images.set(name, BLACK_KEYED.test(name) ?
+            keyBlackPixels(image, THRESHOLD_KEYED.test(name) ? 100 : 0) : image);
           this.sizes.set(name, {w: image.naturalWidth, h: image.naturalHeight});
           done += 1;
           onProgress?.(done, names.length);
