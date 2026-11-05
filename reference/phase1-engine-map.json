@@ -1,0 +1,70 @@
+{
+  "version": 3,
+  "note": "Machine-readable companion to phase1-recon.md (v3). All VAs, imagebase 0x400000.",
+  "d_runtime": {
+    "classinfo": {"layout": {"0x00": "vptr", "0x04": "monitor", "0x08": "init{len,ptr}", "0x10": "name{len,ptr}", "0x18": "vtbl{len,ptr}", "0x20": "interfaces{len,ptr}", "0x28": "base_ci", "0x2c": "default_ctor", "0x30": "invariant"}, "invariant_walker": "0x4160e0", "d_new": "0x418ec8", "ini_array_parser": "0x416268"},
+    "dxlib_return_convention": "0=success, -1=error (critical for pump semantics)"
+  },
+  "classes": {
+    "object.Object": {"ci": "0x439cc0"},
+    "Obj.Obj":         {"ci": "0x433810", "vt": "0x433860", "slots": 21, "base": "object.Object"},
+    "Block.Block":     {"ci": "0x432340", "vt": "0x432390", "slots": 30, "base": "Obj.Obj"},
+    "Clickable.Clickable": {"ci": "0x432660", "vt": "0x4326b0", "slots": 24, "base": "Obj.Obj"},
+    "Number.Number":   {"ci": "0x433530", "vt": "0x433580", "slots": 22, "base": "Obj.Obj"},
+    "Scene.Scene":     {"ci": "0x433d80", "vt": "0x433dd0", "slots": 10, "base": "object.Object"},
+    "ScenePlay.ScenePlay": {"ci": "0x4347d0", "vt": "0x434820", "slots": 28, "base": "Scene.Scene"},
+    "ScenePlay_org.ScenePlay_org": {"ci": "0x434cd0", "vt": "0x434d20", "slots": 20, "base": "Scene.Scene"},
+    "SceneTitle.SceneTitle": {"ci": "0x435bc0", "vt": "0x435c10", "slots": 25, "base": "Scene.Scene"},
+    "SceneEvent.SceneEvent": {"ci": "0x434100", "vt": "0x434150", "slots": 21, "base": "Scene.Scene"},
+    "ScenePhoto.ScenePhoto": {"ci": "0x434270", "vt": "0x4342c0", "slots": 11, "base": "Scene.Scene"},
+    "Field.Field":     {"ci": "0x432df0", "vt": "0x432e40", "slots": 15, "base": "object.Object"},
+    "Game.Game":       {"ci": "0x432ff0", "vt": "0x433040", "slots": 9},
+    "Game.GcWatcher":  {"ci": "0x432f40", "vt": "0x432f90", "slots": 6},
+    "SaveData.SaveData": {"ci": "0x433c40", "vt": "0x433c90", "slots": 27},
+    "tx.Cache.Cache":  {"ci": "0x436010", "vt": "0x436060", "slots": 14},
+    "tx.Input.Input":  {"ci": "0x436440", "vt": "0x436490", "slots": 30}
+  },
+  "vtable_protocols": {
+    "Scene": {"+0x18": "pump (ProcessMessage==0 → run +0x1c, propagate return; 0 = quit game)", "+0x1c": "per-frame update", "+0x20": "init(D-array)", "+0x24": "dispose", "+0x28": "init2(int)"},
+    "Obj": {"+0x18": "init", "+0x1c": "dispose/expire", "+0x20": "init2(sprite-family)", "+0x24": "update", "+0x30": "submit(draw)", "+0x54": "active flag (0=active)", "+0x55": "hidden"}
+  },
+  "obj_fields": {"0x08": "kind/count", "0x0c": "x f32", "0x10": "y f32", "0x14": "vy", "0x18": "vx", "0x1c": "ay", "0x20": "ax", "0x24": "rot", "0x28": "rotV", "0x2c": "rotA", "0x30": "wobble", "0x40": "fade", "0x44": "fadeSpeed", "0x58": "life countdown", "0x5c": "age", "0x6c": "gravity flag", "0x70": "wobble period"},
+  "main_loop": {
+    "fn": "0x4065f0", "game_pace": "0x406730", "game_init_scene": "0x406598", "bootstrap": "0x40680c",
+    "frame_order": ["tx.Input::poll(+0x60)", "windowRestore(0x40f470)", "scene->pump(+0x18) [runs scene->update(+0x1c)]", "switch scene if next", "game->framePace", "pool A update", "pool B update", "pool C update", "pool D update", "if !ff or frame%20==0: pool submits, ClearDrawScreen, flushQueue, ScreenFlip"],
+    "frame_counters": {"0x442664": "total", "0x44266c": "render"}, "fast_forward": "tx.Input +0x48(bool) or +0x58(int) → render 1/20 frames"
+  },
+  "pools": {
+    "A": {"len": "0x442690", "ptr": "0x442694", "cursor": "0x442698", "cap": 100, "class": "Obj.Obj", "factory": "0x4073d0", "update": "0x4074e0", "submit": "0x407528", "flag": "0x4426a0"},
+    "B": {"len": "0x442650", "ptr": "0x442654", "cursor": "0x442658", "cap": 5, "class": "Clickable.Clickable", "factory": "0x403f54", "update": "0x404130", "submit": "0x404178", "flag": "0x442660"},
+    "C": {"len": "0x442678", "ptr": "0x44267c", "cursor": "0x442680", "cap": 10, "class": "Number.Number", "factory": "0x406b9c", "update": "0x406cac", "submit": "0x406cf4", "flag": "0x442688"},
+    "D": {"len": "0x442620", "ptr": "0x442624", "cursor": "0x442628", "cap": 200, "class": "Block.Block", "factory": "0x403010", "update": "0x4031ec", "submit": "0x403234", "flag": "0x442634"}
+  },
+  "draw_queue": {
+    "init": "0x410004", "entry_slot": "0x410120", "flush": "0x41051c",
+    "layers": 8, "entry_size": 56, "initial_capacity": 100, "grow_by": 200,
+    "layer_arrays": "0x4427f0 + 8*i", "layer_counts": "0x442830 + 4*i",
+    "entry": {"0x00": "type (0 rota,1 box,2 string,3 modi,4 tri)", "0x04": "blendMode", "0x08": "blendParam", "0x0c": "bright(RGB same)", "0x10": "x/x1", "0x14": "y/y1", "0x18": "f64 extRate | x2 | fontSize", "0x1c": "f64 angle | y2 | stringPtr", "0x20": "x3|color", "0x24": "y3|fill", "0x28": "grHandle(rota)|x4|color(tri)", "0x2c": "trans(rota)|y4|fill(tri)", "0x30": "revX|grHandle(modi)", "0x34": "trans(modi)"},
+    "submits": {"rota": "0x410278", "box": "0x4102f8", "modi": "0x410390", "tri": "0x410410", "string": "0x41049c"},
+    "dxlib_signatures": {"DrawRotaGraph": "(int x, int y, double ExtRate, double Angle, int gr, int trans, int revX) @36", "DrawBox": "(x1,y1,x2,y2,color,fill)", "DrawModiGraph": "(x1,y1,x2,y2,x3,y3,x4,y4,gr,trans)", "DrawTriangle": "(x1,y1,x2,y2,x3,y3,color,fill)", "DrawString": "(x,y,ptr,color,?)"},
+    "screen": [640, 480]
+  },
+  "box2d_imports": ["_b2d_init 0x431796", "_b2d_step 0x43178a", "_b2d_dispose 0x431790", "_b2d_create_circle", "_b2d_create_box", "_b2d_create_triangle", "_b2d_destroy_body", "_b2d_set_position", "_b2d_set_v", "_b2d_set_user_data", "_b2d_get_contact", "_b2d_get_x", "_b2d_get_y", "_b2d_get_r", "_b2d_get_v"],
+  "physics_step": {"sceneplay_m25": "0x40a9e4", "dt": "world_dt * [0x436a58] substeps", "sceneplay_org": "0x40bedd"},
+  "sceneplay": {
+    "vt": "0x434820", "fields": {"0x08": "next scene", "0x0c": "replay playback flag", "0x30": "state", "0x38": "rng seed", "0x10": "Field walls", "0x18": "Number HUD", "0x1c": "Number HUD2", "0x20": "Obj next-field", "0x28": "Obj timer-field", "0x2c": "Obj spawner"},
+    "slots": {"+0x18": "0x4087a8 pump", "+0x1c": "0x4093bc update/state-dispatch", "+0x20": "0x40941c init", "+0x24": "0x4098ac dispose", "+0x28": "0x4098fc", "+0x2c": "0x40992c pause/quit/step", "+0x30": "0x409d90 chapter progress", "+0x34..+0x70": "gameplay m13..m27 (todo)"},
+    "chapter_thresholds": {"ch>6": [500, 1000, 2000, 3500, 5500, 8000, 20000, 50000, 100000], "score_global": "0x4428c0", "ch8_score_100k_event": "fn_415fb8"}
+  },
+  "globals": {
+    "0x4428a0": "tx.Cache instance", "0x4428a4": "tx.Input instance", "0x4428a8": "window handle",
+    "0x4428c0": "score", "0x4428c4": "chain?", "0x4428c8": "level (init 1)", "0x4428cc": "block_size derived",
+    "0x4428d0": "SaveData instance", "0x4428d4": "D args",
+    "0x4428e0": "? (0 at init)", "0x4428e4": "pause flag (cmdline arg, cleared by input poll==0)",
+    "0x4428f0": "block_odds table", "0x4428f4": "ex_block_odds (if save flag)",
+    "0x436a58": "physics substeps per frame",
+    "0x434588": "m12 chapter jumptable"
+  },
+  "engine_init": {"fn": "0x4069a8", "notable": ["ChangeWindowMode(1)", "Log.txt→log on", "SetDrawMode(1)", "SetDXArchiveKeyString('shine')", "SetDrawScreen(-2)", "SetWaitVSyncFlag(0)", "SetAlwaysRunFlag(1)", "SetWindowUserCloseEnableFlag(0)", "pool init A(100)/B(5)/C(10)"], "pool_D_init": "ScenePlay::init → 0x403010(0xc8=200)"},
+  "ini_config": {"files": "data\\doc\\ + Irisu.ini [Game]", "keys": ["block_odds[10]", "block_size", "ex_block_odds", "ex_block_size"], "loader": "0x41207c"}
+}
