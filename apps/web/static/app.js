@@ -1,16 +1,16 @@
-import {BrowserGame} from "./exact-runtime.js?v=20261006e";
-import {MetsuGame} from "./metsu-runtime.mjs?v=20261105a";
+import {BrowserGame} from "./exact-runtime.js?v=20261106b";
+import {MetsuGame} from "./metsu-runtime.mjs?v=20261106b";
 import {
   activatedTrailAlphas, colorFor, hasActivatedTrail,
-} from "./colors.mjs?v=20261105a";
+} from "./colors.mjs?v=20261106b";
 import {
   clampReplayScrubFrame, parseReplay, REPLAY_TICK_MS,
-} from "./replay.mjs?v=20261105a";
-import {RestartGate} from "./restart-gate.mjs?v=20261006e";
-import {createSoundtrack} from "./music.mjs?v=20261006e";
-import {offlineStatus} from "./offline.mjs?v=20261103a";
-import {SpriteBank, blockSpriteName, blockRenderState} from "./sprites.mjs?v=20261106a";
-import {createSfx} from "./sfx.mjs?v=20261106a";
+} from "./replay.mjs?v=20261106b";
+import {RestartGate} from "./restart-gate.mjs?v=20261106b";
+import {createSoundtrack} from "./music.mjs?v=20261106b";
+import {offlineStatus} from "./offline.mjs?v=20261106b";
+import {SpriteBank, blockSpriteName, blockRenderState} from "./sprites.mjs?v=20261106b";
+import {createSfx} from "./sfx.mjs?v=20261106b";
 
 const canvas = document.querySelector("#game");
 const ctx = canvas.getContext("2d", {alpha: false});
@@ -61,6 +61,10 @@ const scorePopups = [];
 const burstEffects = [];    // expanding sprite ghosts on burst
 const popEffects = [];      // bubble pop rings
 const shotKindById = new Map();  // body id -> "sball" | "fball"
+// Direct-hit sounds play once per shot/block pair: the clone re-reports the
+// pair on every frame it stays in contact (bubbles and rotten blocks do not
+// consume the shot), which used to machine-gun the tick until it stuck.
+const projectileHitSeen = new Set();
 const soundtrack = createSoundtrack(document, window);
 const sprites = new SpriteBank("assets");
 const sfx = createSfx({volume: .8});
@@ -71,6 +75,14 @@ let assetsReady = false;
 // not carry group chains for block bursts, so we approximate with the burst
 // size of the frame (exact for bubble pops via the event value).
 let frameBurstCount = 0;
+// New block contacts this frame (chain-0 tick candidates).
+let frameContactCount = 0;
+
+function involvesProjectile(id) {
+  if (id === 0) return false;  // boundary
+  const body = bodyPositions.get(id);
+  return !body || body.kind === "projectile";
+}
 
 async function loadAssets() {
   try {
@@ -181,6 +193,7 @@ function acceptSnapshot(next, force = false) {
     burstEffects.length = 0;
     popEffects.length = 0;
     shotKindById.clear();
+    projectileHitSeen.clear();
     trailTick = -1;
   }
   if (next.observation.tick !== trailTick) {
@@ -384,18 +397,13 @@ function fillBody(body, size, color, pose, alpha = 1) {
   ctx.restore();
 }
 
-// Original background selection, reversed from the Field background changer
-// (0x405740..): normal starts on back1, moves to back2 once the music state
-// reaches 4, and to back3 above 40000 points; metsu uses the back1_ex family.
-function backgroundName(state) {
-  if (gameMode === "metsu") {
-    if (state.score > 100000) return "back1_ex3";
-    if (state.score > 20000) return "back1_ex2";
-    return "back1_ex";
-  }
-  if (state.score > 40000) return "back3";
-  if (state.level >= 9) return "back2";
-  return "back1";
+// Original background layering (Field ctor 0x404652..0x4046d5): every frame
+// composites on an opaque dark canvas, then the opaque doodle sheet — neko_01
+// (normal) / ex_back (metsu). The Field also loads a girl cutout (back1 family
+// normal, back1_ex family metsu) that sits above the doodles; that layer is
+// intentionally not rendered yet.
+function backgroundName() {
+  return gameMode === "metsu" ? "ex_back" : "neko_01";
 }
 
 function drawBodySprite(body, pose, now) {
@@ -485,15 +493,18 @@ function drawBody(body, now) {
 }
 
 function drawBackdrop(state) {
+  // The backdrop must be repainted opaque every frame: the original clears to
+  // its dark surround (frame.png's 16,16,16) before layering the doodle sheet.
+  // Skipping that made every translucent draw leave a permanent afterimage.
+  ctx.fillStyle = "#101010";
+  ctx.fillRect(0, 0, 640, 480);
   if (assetsReady) {
-    const name = backgroundName(state || {score: 0, level: 1});
+    const name = backgroundName();
     if (sprites.has(name)) {
       sprites.draw(ctx, name, 320, 240, {});
       return;
     }
   }
-  ctx.fillStyle = "#0c1517";
-  ctx.fillRect(0, 0, 640, 480);
 }
 
 function outlinedText(text, x, y, size, align = "left", c = ctx) {
@@ -520,7 +531,6 @@ function makeStrip() {
   c.translate(0, -HUD_Y);
   return {canvas: strip, ctx: c, key: null};
 }
-const levelStrip = makeStrip();
 const scoreStrip = makeStrip();
 let gaugeGradient = null;
 let lifeGradient = null;
@@ -563,12 +573,32 @@ function cachedStrip(strip, key, render) {
   ctx.drawImage(strip.canvas, 0, HUD_Y);
 }
 
-function drawHud(state) {
-  cachedStrip(levelStrip, state.level, (c) => {
-    outlinedText("Level", 21, 428, 28, "left", c);
-    outlinedText(String(state.level), 52, 458, 25, "center", c);
-  });
+// The HUD score uses the original's white num_score digit strip (ten 15x30
+// cells); the strip is sliced per digit like the original's DerivationGraph
+// cells. Falls back to outlined text while assets load.
+const SCORE_DIGIT_W = 15;
+const SCORE_DIGIT_H = 30;
 
+function drawScoreDigits(c, value, x, y, align) {
+  if (assetsReady && sprites.has("num_score")) {
+    const image = sprites.variant("num_score", 255);
+    if (image) {
+      const text = String(Math.max(0, value)).padStart(8, "0");
+      const left = align === "left" ? x : x - text.length * SCORE_DIGIT_W / 2;
+      for (let i = 0; i < text.length; i++) {
+        const digit = text.charCodeAt(i) - 48;
+        if (digit < 0 || digit > 9) continue;
+        c.drawImage(image, digit * SCORE_DIGIT_W, 0, SCORE_DIGIT_W, SCORE_DIGIT_H,
+          left + i * SCORE_DIGIT_W, y - SCORE_DIGIT_H / 2,
+          SCORE_DIGIT_W, SCORE_DIGIT_H);
+      }
+      return;
+    }
+  }
+  outlinedText(String(Math.max(0, value)).padStart(8, "0"), x, y, 26, align, c);
+}
+
+function drawHud(state) {
   if (gameMode === "metsu") {
     drawLifeGauge(state);
   } else {
@@ -590,27 +620,12 @@ function drawHud(state) {
   const digits = String(state.score).padStart(8, "0");
   const metsuLayout = gameMode === "metsu";
   // In Metsu the score relocates to the left side (beside the vertical life
-  // gauge), smaller and left-aligned, matching the original layout. The cache
-  // key is namespaced by mode so a mode switch always re-renders the strip.
+  // gauge), matching the original layout. The cache key is namespaced by mode
+  // so a mode switch always re-renders the strip.
   cachedStrip(scoreStrip, (metsuLayout ? "m:" : "n:") + digits, (c) => {
     c.textBaseline = "middle";
-    if (metsuLayout) {
-      c.textAlign = "left";
-      c.font = "900 22px Georgia, serif";
-      c.strokeStyle = "#2a1640";
-      c.lineWidth = 4;
-      c.strokeText(digits, 78, 462);
-      c.fillStyle = "#eee0a4";
-      c.fillText(digits, 78, 462);
-    } else {
-      c.textAlign = "center";
-      c.font = "900 26px Georgia, serif";
-      c.strokeStyle = "#681a38";
-      c.lineWidth = 5;
-      c.strokeText(digits, 320, 462);
-      c.fillStyle = "#eee0a4";
-      c.fillText(digits, 320, 462);
-    }
+    drawScoreDigits(c, state.score, metsuLayout ? 78 : 320, 462,
+      metsuLayout ? "left" : "center");
   });
 }
 
@@ -718,28 +733,25 @@ function drawBurstEffects(now) {
 }
 
 function drawWalls(state) {
+  const f = state.field;
+  const thick = 16;
+  const blank = gameMode === "metsu" ? 30 : 40;
   if (assetsReady && sprites.has("field_l")) {
-    const f = state.field;
-    const thick = 16;
-    const blank = gameMode === "metsu" ? 30 : 40;
     const cy = f.y + f.height / 2;
     // Sprite sizes: field_l/r 20x380, field_t 460x10, field_b 460x60.
     // The walls visually hug the physics fixtures (clone-validated centers).
+    // The top gate lives offscreen in the original (field_top = -140), so its
+    // bar is never visible and is not drawn.
     sprites.draw(ctx, "field_l", f.x + thick / 2, cy, {});
     sprites.draw(ctx, "field_r", f.x + f.width + thick, cy, {});
-    sprites.draw(ctx, "field_t", f.x + f.width / 2 + thick / 2, f.y, {});
     sprites.draw(ctx, "field_b", f.x + f.width / 2 + thick / 2,
       f.y + f.height + blank + 30, {});
     return;
   }
-  const f = state.field;
-  const thick = 16;
-  const blank = gameMode === "metsu" ? 30 : 40;
   ctx.fillStyle = "#f3f3ef";
   ctx.fillRect(f.x, f.y, thick, f.height);
   ctx.fillRect(f.x + f.width + thick / 2, f.y, thick, f.height);
   ctx.fillRect(f.x - thick / 2, f.y + f.height + blank, f.width + thick * 2, thick);
-  ctx.fillRect(f.x + thick, 0, f.width, 10);
   ctx.fillStyle = "#cad0cd55";
   ctx.fillRect(f.x, f.y, 3, f.height);
   ctx.fillRect(f.x + f.width + thick / 2, f.y, 3, f.height);
@@ -825,11 +837,13 @@ function draw(now) {
 
 function processEvents(events) {
   frameBurstCount = 0;
+  frameContactCount = 0;
   for (const event of events) {
     if (event.sequence <= lastEvent) continue;
     lastEvent = event.sequence;
     switch (event.kind_name) {
       case "shot_fired":
+        // The original fires silently; the shot speaks on its first contact.
         shotKindById.set(event.a, event.value === 1 ? "fball" : "sball");
         break;
       case "bubble_popped":
@@ -843,13 +857,28 @@ function processEvents(events) {
       case "rotten":
         sfx.rotPenalty();
         break;
-      case "projectile_contact":
-        sfx.hitTick();
+      case "contact":
+        // New-contact fanfare (ScenePlay 0x40a9e4): frames whose contacts form
+        // no chain play the se_c0 tick once. Shots have their own direct-hit
+        // sounds, so pairs involving a projectile are excluded.
+        if (event.detail !== "begin_contact") break;
+        if (involvesProjectile(event.a) || involvesProjectile(event.b)) break;
+        frameContactCount += 1;
         break;
-      case "projectile_hit":
-        if (event.value >= 2) sfx.hitCrush();
+      case "projectile_contact":
+        // Projectile-projectile contacts are ignored by the original.
+        break;
+      case "projectile_hit": {
+        // Direct hit (ScenePlay 0x40a89c): first contact ticks call07, a shot
+        // that crushes its block (hits >= 2) plays decide3 — once per pair.
+        const pairKey = `${event.a}:${event.b}`;
+        if (projectileHitSeen.has(pairKey)) break;
+        projectileHitSeen.add(pairKey);
+        if (projectileHitSeen.size > 1024) projectileHitSeen.clear();
+        if (event.value >= 1) sfx.hitCrush();
         else sfx.hitTick();
         break;
+      }
       case "level_changed":
         sfx.levelUp();
         showToast(`LEVEL ${event.value}`);
@@ -885,8 +914,11 @@ function processEvents(events) {
     }
   }
   // The burst fanfare plays once per contact frame in the original
-  // (after the whole traversal), keyed on the frame's best chain.
+  // (after the whole traversal), keyed on the frame's best chain. A frame that
+  // formed a chain plays only the pitched burst — the chainless se_c0 tick is
+  // suppressed exactly like the original's tracked maxima do.
   if (frameBurstCount > 0) sfx.burst(frameBurstCount - 1);
+  else if (frameContactCount > 0) sfx.touchTick();
 }
 
 function showReplayPosition(frame, totalFrames) {

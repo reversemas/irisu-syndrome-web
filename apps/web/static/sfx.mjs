@@ -120,6 +120,11 @@ export function createSfx({volume = 0.8} = {}) {
     hitCrush() {
       play("decide3");
     },
+    // Chain-0 contact fanfare (se_c0, cursor3.wav): one tick per frame whose
+    // new contacts formed no chain (ScenePlay 0x40ac11).
+    touchTick() {
+      play("cursor3", {gain: .5});
+    },
     levelUp() {
       play("power14");
     },

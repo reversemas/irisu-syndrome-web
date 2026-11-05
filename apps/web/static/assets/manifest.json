@@ -625,6 +625,16 @@
    "h": 480,
    "w": 640
   },
+  "neko_01": {
+   "group": "backgrounds",
+   "h": 480,
+   "w": 640
+  },
+  "neko_02": {
+   "group": "backgrounds",
+   "h": 480,
+   "w": 640
+  },
   "num_chain": {
    "group": "hud",
    "h": 60,
