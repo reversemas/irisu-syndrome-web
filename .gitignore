@@ -1,0 +1,49 @@
+# Port inputs ARE committed (archives, exe, dlls, replays, story files) — they
+# are the extraction and parity-validation inputs. See README "Legal posture".
+# Local-only working outputs stay ignored:
+/reference/extracted/
+/reference/archives/
+/reference/replays/raw/
+/reference/videos/raw/
+/reference/runs/
+/reference/captures/
+
+# Local experiment outputs.
+/reference/**/*.log
+/reference/**/*.tmp
+/artifacts/
+/outputs/
+/irisu-*-replay-*.mp4
+/irisu-*-replay-*.mkv
+
+# Python tooling caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+dist/
+python/*.egg-info/
+
+# Frontend and deployment-local files.
+.env
+.env.*
+!.env.example
+node_modules/
+.next/
+/apps/*/coverage/
+/apps/*/dist/
+
+# Editor and operating-system metadata.
+.DS_Store
+.idea/
+.vscode/
+
+# Local native build products.
+/build/
+/build-*/
+/.tmp/
+compile_commands.json

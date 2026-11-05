@@ -1,0 +1,1 @@
+Simply extract the "data" folder into your Irisu directory, overwriting the one present.

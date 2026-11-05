@@ -1,0 +1,10 @@
+#!/bin/sh
+export HOME=/root
+export PATH=/sbin:/usr/sbin:/bin:/usr/bin
+export PS1='~% '
+
+mkdir -p /mnt
+mount -t proc proc /proc
+mount -t 9p -o trans=virtio,version=9p2000.L,cache=loose host9p /mnt || exit 1
+printf '%s\n' '__IRISU_GUEST_READY__'
+exec /bin/sh
