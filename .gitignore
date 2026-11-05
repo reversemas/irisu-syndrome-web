@@ -47,3 +47,6 @@ node_modules/
 /build-*/
 /.tmp/
 compile_commands.json
+
+# Generated exact-runtime artifact (see apps/web/EXACT_RUNTIME_SOURCES.md)
+/apps/web/static/exact-runtime/
