@@ -7,17 +7,21 @@ const BUBBLE_PITCH_BASE = 17050;
 const BUBBLE_PITCH_STEP = 5000;
 const MAX_PITCH_CHAIN = 8;
 
-// Reversed event -> sound map (see reference/phase1-recon addendum):
+// Reversed event -> sound map (see reference/phase1-presentation.md):
 //   rot penalty          -> buble02   (Block.update 0x40353a)
 //   bubble pop           -> buble03 @ chain pitch (0x40359f)
 //   burst, chain 0       -> se_c0 = cursor3.wav   (contact fanfare 0x40ac5f)
 //   burst, chain >= 1    -> se_c1 = puu89.wav @ chain pitch (0x40accf)
 //   burst layer          -> se_v0 = decide10.wav  (0x40ad22)
 //   big-chain layer      -> se_v1 = decide12.wav  (0x40ad9c)
-//   direct hit tick      -> call07   (0x40a92f)
-//   direct hit crush     -> decide3  (0x40a90d)
-//   level up             -> power14  (0x40afb9, right after set_level)
+//   floating-block hit   -> cursor3  (activation 0x40a7d8): the hit sound of
+//                           a launched grey block touching a floating block
+//                           (a block not yet under gravity), and of a falling
+//                           block touching the next floating block.
+//   direct hit crush     -> decide3  (0x40a90d): second hit on a block that
+//                           is already falling destroys it.
 //   game over stinger    -> decide10 (finish path 0x40ad49)
+// call07 (first direct hit) and power14 (level up) are retired.
 
 export function createSfx({volume = 0.8} = {}) {
   let ctx = null;
@@ -114,19 +118,14 @@ export function createSfx({volume = 0.8} = {}) {
       play("decide10", {gain: .8});
       if (chain >= 3) play("decide12", {gain: .7});
     },
-    hitTick() {
-      play("call07", {gain: .7});
+    // The hit sound: a floating block (not yet under gravity) gets touched
+    // by a launched grey block, or by a block that is already falling. Each
+    // activation plays once — the event fires exactly at that transition.
+    hitBlock() {
+      play("cursor3");
     },
     hitCrush() {
       play("decide3");
-    },
-    // Chain-0 contact fanfare (se_c0, cursor3.wav): one tick per frame whose
-    // new contacts formed no chain (ScenePlay 0x40ac11).
-    touchTick() {
-      play("cursor3", {gain: .5});
-    },
-    levelUp() {
-      play("power14");
     },
     gameOver() {
       play("decide10");

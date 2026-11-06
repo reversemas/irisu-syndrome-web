@@ -55,6 +55,10 @@ export function createSoundtrack(document, window, {
   let wantPlay = false;
   let consecutiveErrors = 0;
   let muted = false;
+  // A one-shot takeover track (result-music jingle). While it plays the
+  // random soundtrack stays paused; a persisting jingle keeps the stage
+  // silent after it ends, a passing one hands control back when it ends.
+  let exclusive = null;
   try { muted = window.localStorage?.getItem(MUTE_KEY) === "1"; } catch (_) { /* storage unavailable */ }
 
   function load(track) {
@@ -68,6 +72,7 @@ export function createSoundtrack(document, window, {
   }
 
   function apply() {
+    if (exclusive) return;  // the jingle owns the audio stage
     if (!tracks.length) return;
     if (!wantPlay || muted) {
       if (!audio.paused) audio.pause();
@@ -100,8 +105,37 @@ export function createSoundtrack(document, window, {
     muted = Boolean(value);
     try { window.localStorage?.setItem(MUTE_KEY, muted ? "1" : "0"); } catch (_) { /* storage unavailable */ }
     if (!muted) startRequested = true; // unmuting is itself a user gesture
+    if (exclusive) exclusive.element.muted = muted;
     apply();
     return muted;
+  }
+
+  function stopExclusive() {
+    if (!exclusive) return;
+    const element = exclusive.element;
+    exclusive = null;
+    try { element.pause(); } catch (_) { /* already gone */ }
+  }
+
+  // Swap the soundtrack for a single named track (lose fanfare, milestone
+  // jingle). `persist` keeps the result screen silent after it finishes;
+  // otherwise the random soundtrack resumes where it left off.
+  function playExclusive(src, {persist = false} = {}) {
+    const element = createAudio();
+    element.preload = "auto";
+    if (!audio.paused) audio.pause();
+    stopExclusive();
+    exclusive = {element, persist: Boolean(persist)};
+    element.muted = muted;
+    element.src = src;
+    element.addEventListener("ended", () => {
+      if (!exclusive || exclusive.element !== element) return;
+      const resume = !exclusive.persist;
+      exclusive = null;
+      if (resume) apply();
+    });
+    const result = element.play();
+    if (result && typeof result.catch === "function") result.catch(() => {});
   }
 
   function update(next = snapshot) {
@@ -110,6 +144,7 @@ export function createSoundtrack(document, window, {
     snapshot = next;
     wantPlay = Boolean(next?.running && !next.observation?.terminated);
     if (newRun && tracks.length) {
+      stopExclusive();
       audio.pause();
       load(pickNext(tracks, currentTrack, random));
     }
@@ -124,5 +159,5 @@ export function createSoundtrack(document, window, {
   }).catch(() => {});
 
   return {update, start, ready, audio, setMuted, toggleMute: () => setMuted(!muted), isMuted: () => muted,
-    trackCount: () => tracks.length};
+    trackCount: () => tracks.length, playExclusive, stopExclusive};
 }

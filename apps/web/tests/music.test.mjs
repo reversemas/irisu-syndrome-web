@@ -132,3 +132,72 @@ test("unmuting works as the first gesture even before any shot was fired", async
   music.setMuted(false);
   assert.equal(audio.plays, 1);
 });
+
+function setupExclusive(random = () => 0) {
+  const audios = [];
+  const storage = new Map();
+  const music = createSoundtrack({}, {location: {protocol: "capacitor:"},
+    localStorage: {getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value)}, setTimeout}, {
+    random,
+    createAudio: () => { const audio = fakeAudio(); audios.push(audio); return audio; },
+    loadTracks: async () => ({version: "v", tracks}),
+    cache: async () => {},
+    delayCache: 0,
+  });
+  return {audios, music, ready: music.ready};
+}
+
+test("an exclusive jingle stops the soundtrack and a passing one hands control back", async () => {
+  const {audios, music, ready} = setupExclusive();
+  await ready;
+  music.start();
+  music.update(running());
+  const main = audios[0];
+  assert.equal(main.plays, 1);
+  music.playExclusive("bgm/i_go03B.mp3", {persist: false});
+  assert.equal(main.paused, true);
+  const jingle = audios[1];
+  assert.equal(jingle.src, "bgm/i_go03B.mp3");
+  assert.equal(jingle.plays, 1);
+  music.update(running());          // must not restart the BGM mid-jingle
+  assert.equal(main.plays, 1);
+  jingle.emit("ended");             // passing jingle ends -> BGM resumes
+  assert.equal(main.paused, false);
+  assert.equal(main.plays, 2);
+});
+
+test("a persisting jingle keeps the stage silent until a new run", async () => {
+  const {audios, music, ready} = setupExclusive();
+  await ready;
+  music.start();
+  music.update(running());
+  music.update(running(1, {observation: {terminated: true}}));
+  const main = audios[0];
+  music.playExclusive("bgm/irisu_gos1.mp3", {persist: true});
+  const jingle = audios[1];
+  jingle.emit("ended");
+  music.update(running(1, {observation: {terminated: true}}));
+  assert.equal(main.paused, true);  // the result screen stays silent
+  music.update(running(2));         // a new run restarts the soundtrack
+  assert.equal(main.paused, false);
+  // A run that ends while its jingle is still playing stops that jingle.
+  music.playExclusive("bgm/i_go05A.mp3", {persist: true});
+  const second = audios[2];
+  assert.equal(second.paused, false);
+  music.update(running(3));         // new run interrupts the playing jingle
+  assert.equal(second.paused, true);
+});
+
+test("muting silences a playing jingle without stopping it", async () => {
+  const {audios, music, ready} = setupExclusive();
+  await ready;
+  music.start();
+  music.update(running());
+  music.playExclusive("bgm/i_go05A.mp3", {persist: true});
+  const jingle = audios[1];
+  music.setMuted(true);
+  assert.equal(jingle.muted, true);
+  assert.equal(jingle.paused, false);
+  music.setMuted(false);
+  assert.equal(jingle.muted, false);
+});

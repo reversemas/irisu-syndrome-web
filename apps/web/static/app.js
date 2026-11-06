@@ -75,13 +75,86 @@ let assetsReady = false;
 // not carry group chains for block bursts, so we approximate with the burst
 // size of the frame (exact for bubble pops via the event value).
 let frameBurstCount = 0;
-// New block contacts this frame (chain-0 tick candidates).
-let frameContactCount = 0;
 
-function involvesProjectile(id) {
-  if (id === 0) return false;  // boundary
-  const body = bodyPositions.get(id);
-  return !body || body.kind === "projectile";
+// --- Ending & milestone sequences ---------------------------------------
+// The Field's girl cutout sits above the doodles at a faint alpha during
+// play (back1 in normal mode / the back1_ex tier in metsu). When the run
+// ends the soundtrack stops for the mode's result music — irisu_gos1
+// (normal) or i_go05A (metsu) — and she slowly fades in to full. Below 20k
+// the normal mode fades in back2 instead of back1; metsu picks its tier
+// image by the final score (back1_ex, back1_ex2 from 40k, back1_ex3 from
+// 100k). Crossing 100k mid-run in metsu swaps the soundtrack for i_go03B.
+const GIRL_IDLE_ALPHA = 70;    // "she sits in the background at ~70 opacity"
+const GIRL_FADE_MS = 7000;    // slow fade-in under the result music
+
+const ending = {
+  started: false, image: null, fadeStartedAt: 0,
+  revealed: false, revealTimer: 0,
+};
+let metsuMilestone100k = false;
+
+function resetEnding() {
+  ending.started = false;
+  ending.image = null;
+  ending.fadeStartedAt = 0;
+  ending.revealed = false;
+  clearTimeout(ending.revealTimer);
+  ending.revealTimer = 0;
+  metsuMilestone100k = false;
+}
+
+function metsuGirlTier(score) {
+  if (score >= 100000) return "back1_ex3";
+  if (score >= 40000) return "back1_ex2";
+  return "back1_ex";   // covers <20k and the 20k-40k stretch
+}
+
+function updateSequences(state) {
+  if (snapshot?.mode === "replay") return;
+  const metsu = gameMode === "metsu";
+  const ended = Boolean(state.terminated || state.truncated);
+  if (!ending.started && ended) {
+    ending.started = true;
+    ending.image = metsu
+      ? metsuGirlTier(Math.max(0, state.score))
+      : (Math.max(0, state.score) < 20000 ? "back2" : "back1");
+    ending.fadeStartedAt = performance.now();
+    soundtrack.playExclusive(metsu ? "bgm/i_go05A.mp3" : "bgm/irisu_gos1.mp3",
+      {persist: true});
+    // Let the fade-in own the screen for its whole length before the
+    // result panel appears over her.
+    ending.revealTimer = setTimeout(() => {
+      ending.revealTimer = 0;
+      ending.revealed = true;
+      syncUi();
+    }, GIRL_FADE_MS + 500);
+    return;
+  }
+  if (!ended && metsu && !metsuMilestone100k && state.score >= 100000) {
+    metsuMilestone100k = true;
+    soundtrack.playExclusive("bgm/i_go03B.mp3", {persist: false});
+  }
+}
+
+function girlFadeInProgress() {
+  return ending.started && performance.now() - ending.fadeStartedAt < GIRL_FADE_MS;
+}
+
+function drawGirlLayer(now) {
+  if (!assetsReady || !snapshot) return;
+  let name;
+  let alpha = GIRL_IDLE_ALPHA;
+  if (ending.started && ending.image) {
+    name = ending.image;
+    const progress = Math.min(1, (now - ending.fadeStartedAt) / GIRL_FADE_MS);
+    alpha = GIRL_IDLE_ALPHA + (255 - GIRL_IDLE_ALPHA) * progress;
+  } else if (gameMode === "metsu") {
+    name = metsuGirlTier(snapshot.observation?.score || 0);
+  } else {
+    name = "back1";
+  }
+  if (!sprites.has(name)) return;
+  sprites.draw(ctx, name, 320, 240, {alpha: Math.round(alpha)});
 }
 
 async function loadAssets() {
@@ -89,7 +162,7 @@ async function loadAssets() {
     await Promise.all([
       sprites.load(),
       sfx.preload(["buble02", "buble03", "cursor3", "puu89", "decide3",
-        "decide10", "decide12", "call07", "power14"]),
+        "decide10", "decide12"]),
     ]);
     assetsReady = true;
     dirty = true;
@@ -194,6 +267,7 @@ function acceptSnapshot(next, force = false) {
     popEffects.length = 0;
     shotKindById.clear();
     projectileHitSeen.clear();
+    resetEnding();
     trailTick = -1;
   }
   if (next.observation.tick !== trailTick) {
@@ -399,9 +473,8 @@ function fillBody(body, size, color, pose, alpha = 1) {
 
 // Original background layering (Field ctor 0x404652..0x4046d5): every frame
 // composites on an opaque dark canvas, then the opaque doodle sheet — neko_01
-// (normal) / ex_back (metsu). The Field also loads a girl cutout (back1 family
-// normal, back1_ex family metsu) that sits above the doodles; that layer is
-// intentionally not rendered yet.
+// (normal) / ex_back (metsu). The girl cutout (back1 family normal, back1_ex
+// family metsu) sits above the doodles at a faint alpha (drawGirlLayer).
 function backgroundName() {
   return gameMode === "metsu" ? "ex_back" : "neko_01";
 }
@@ -573,23 +646,31 @@ function cachedStrip(strip, key, render) {
   ctx.drawImage(strip.canvas, 0, HUD_Y);
 }
 
-// The HUD score uses the original's white num_score digit strip (ten 15x30
-// cells); the strip is sliced per digit like the original's DerivationGraph
-// cells. Falls back to outlined text while assets load.
-const SCORE_DIGIT_W = 15;
-const SCORE_DIGIT_H = 30;
+// The HUD score uses the ranking digit strips — ranking_num (normal) and
+// ranking_num_ex (metsu): ten 27x33 cells, confirmed by column projection.
+// Falls back to outlined text while assets load.
+const SCORE_DIGIT_W = 27;
+const SCORE_DIGIT_H = 33;
+
+function scoreSheetName() {
+  return gameMode === "metsu" ? "ranking_num_ex" : "ranking_num";
+}
 
 function drawScoreDigits(c, value, x, y, align) {
-  if (assetsReady && sprites.has("num_score")) {
-    const image = sprites.variant("num_score", 255);
+  const sheet = scoreSheetName();
+  if (assetsReady && sprites.has(sheet)) {
+    const image = sprites.variant(sheet, 255);
     if (image) {
       const text = String(Math.max(0, value)).padStart(8, "0");
-      const left = align === "left" ? x : x - text.length * SCORE_DIGIT_W / 2;
+      // Snap to whole pixels: a fractional y (462 - 33/2 = 445.5) makes the
+      // browser resample the glyph strip and the digits render blurred.
+      const top = Math.round(y - SCORE_DIGIT_H / 2);
+      const left = Math.round(align === "left" ? x : x - text.length * SCORE_DIGIT_W / 2);
       for (let i = 0; i < text.length; i++) {
         const digit = text.charCodeAt(i) - 48;
         if (digit < 0 || digit > 9) continue;
         c.drawImage(image, digit * SCORE_DIGIT_W, 0, SCORE_DIGIT_W, SCORE_DIGIT_H,
-          left + i * SCORE_DIGIT_W, y - SCORE_DIGIT_H / 2,
+          left + i * SCORE_DIGIT_W, top,
           SCORE_DIGIT_W, SCORE_DIGIT_H);
       }
       return;
@@ -629,24 +710,29 @@ function drawHud(state) {
   });
 }
 
-// Score popups use the original ranking_num_ex digit strip (10 cells of
-// 27px), rising one pixel per update for 100 updates like the Number class.
+// Score popups use the mode's ranking digit strip (10 cells of 27px),
+// rising one pixel per update for 100 updates like the Number class.
 const POPUP_DIGIT_W = 27;
 const POPUP_DIGIT_H = 33;
 
 function drawPopupDigits(value, x, y, alpha) {
-  if (!assetsReady || !sprites.has("ranking_num_ex")) return false;
-  const image = sprites.variant("ranking_num_ex", 255);
+  const sheet = scoreSheetName();
+  if (!assetsReady || !sprites.has(sheet)) return false;
+  const image = sprites.variant(sheet, 255);
   if (!image) return false;
   const text = String(value);
   const total = text.length * POPUP_DIGIT_W;
   ctx.save();
   ctx.globalAlpha = alpha;
+  // Snapped to whole pixels: the original's Number class rises one integer
+  // pixel per update, and fractional rows blur the glyph strip.
+  const left = Math.round(x - total / 2);
+  const top = Math.round(y - POPUP_DIGIT_H / 2);
   for (let i = 0; i < text.length; i++) {
     const digit = text.charCodeAt(i) - 48;
     if (digit < 0 || digit > 9) continue;
     ctx.drawImage(image, digit * POPUP_DIGIT_W, 0, POPUP_DIGIT_W, POPUP_DIGIT_H,
-      x - total / 2 + i * POPUP_DIGIT_W, y - POPUP_DIGIT_H / 2,
+      left + i * POPUP_DIGIT_W, top,
       POPUP_DIGIT_W, POPUP_DIGIT_H);
   }
   ctx.restore();
@@ -735,8 +821,13 @@ function drawBurstEffects(now) {
 function drawWalls(state) {
   const f = state.field;
   const thick = 16;
-  const blank = gameMode === "metsu" ? 30 : 40;
-  if (assetsReady && sprites.has("field_l")) {
+  // Original layering: the wall sprites are metsu-only — the metsu setup
+  // (0x405287..0x4053a7) is the only place irisu.exe loads them. Normal mode
+  // draws its frame as plain white rects directly on the physics fixtures.
+  // The old unconditional sprite path put 20x380 art over 16x250 fixtures, so
+  // blocks sailed through the stretches where no fixture was behind the
+  // bar — that is why the normal-mode side walls never stopped anything.
+  if (gameMode === "metsu" && assetsReady && sprites.has("field_l")) {
     const cy = f.y + f.height / 2;
     // Sprite sizes: field_l/r 20x380, field_t 460x10, field_b 460x60.
     // The walls visually hug the physics fixtures (clone-validated centers).
@@ -745,16 +836,24 @@ function drawWalls(state) {
     sprites.draw(ctx, "field_l", f.x + thick / 2, cy, {});
     sprites.draw(ctx, "field_r", f.x + f.width + thick, cy, {});
     sprites.draw(ctx, "field_b", f.x + f.width / 2 + thick / 2,
-      f.y + f.height + blank + 30, {});
+      f.y + f.height + 30 + 30, {});
     return;
   }
+  // Plain white frame: side bars exactly on the side-wall fixtures (x ..
+  // x+16 between side_wall_top and side_wall_bottom), floor bar under the
+  // blank. Blocks now stop exactly where the drawn walls are.
+  const blank = gameMode === "metsu" ? 30 : 40;
+  const top = Number.isFinite(f.side_wall_top) ? f.side_wall_top : f.y;
+  const bottom = Number.isFinite(f.side_wall_bottom) ? f.side_wall_bottom
+    : f.y + f.height;
+  const wallHeight = Math.max(1, bottom - top);
   ctx.fillStyle = "#f3f3ef";
-  ctx.fillRect(f.x, f.y, thick, f.height);
-  ctx.fillRect(f.x + f.width + thick / 2, f.y, thick, f.height);
+  ctx.fillRect(f.x, top, thick, wallHeight);
+  ctx.fillRect(f.x + f.width + thick / 2, top, thick, wallHeight);
   ctx.fillRect(f.x - thick / 2, f.y + f.height + blank, f.width + thick * 2, thick);
   ctx.fillStyle = "#cad0cd55";
-  ctx.fillRect(f.x, f.y, 3, f.height);
-  ctx.fillRect(f.x + f.width + thick / 2, f.y, 3, f.height);
+  ctx.fillRect(f.x, top, 3, wallHeight);
+  ctx.fillRect(f.x + f.width + thick / 2, top, 3, wallHeight);
 }
 
 let oldBodiesSource = null;
@@ -800,13 +899,15 @@ function draw(now) {
   // chain freezes the canvas while the simulation and sounds keep running).
   requestAnimationFrame(draw);
   if (!dirty && !snapshot?.running && scorePopups.length === 0 &&
-      burstEffects.length === 0 && popEffects.length === 0) {
+      burstEffects.length === 0 && popEffects.length === 0 &&
+      !girlFadeInProgress()) {
     return;
   }
   dirty = false;
   try {
     const state = snapshot?.observation;
     drawBackdrop(state);
+    drawGirlLayer(now);
     if (snapshot) {
       drawWalls(state);
       const bodies = interpolatedBodies(now);
@@ -846,7 +947,6 @@ function draw(now) {
 
 function processEvents(events) {
   frameBurstCount = 0;
-  frameContactCount = 0;
   for (const event of events) {
     if (event.sequence <= lastEvent) continue;
     lastEvent = event.sequence;
@@ -866,32 +966,22 @@ function processEvents(events) {
       case "rotten":
         sfx.rotPenalty();
         break;
-      case "contact":
-        // New-contact fanfare (ScenePlay 0x40a9e4): frames whose contacts form
-        // no chain play the se_c0 tick once. Shots have their own direct-hit
-        // sounds, so pairs involving a projectile are excluded.
-        if (event.detail !== "begin_contact") break;
-        if (involvesProjectile(event.a) || involvesProjectile(event.b)) break;
-        frameContactCount += 1;
-        break;
-      case "projectile_contact":
-        // Projectile-projectile contacts are ignored by the original.
+      case "activated":
+        // The hit sound: a floating block (not yet under gravity) touched by
+        // a launched grey block, or by a block that is already falling. The
+        // event fires exactly once per activation, so it cannot machine-gun.
+        sfx.hitBlock();
         break;
       case "projectile_hit": {
-        // Direct hit (ScenePlay 0x40a89c): first contact ticks call07, a shot
-        // that crushes its block (hits >= 2) plays decide3 — once per pair.
+        // Second direct hit destroys the block (decide3, 0x40a90d) — once
+        // per pair. The first hit is silent; call07 is retired.
         const pairKey = `${event.a}:${event.b}`;
         if (projectileHitSeen.has(pairKey)) break;
         projectileHitSeen.add(pairKey);
         if (projectileHitSeen.size > 1024) projectileHitSeen.clear();
         if (event.value >= 1) sfx.hitCrush();
-        else sfx.hitTick();
         break;
       }
-      case "level_changed":
-        sfx.levelUp();
-        showToast(`LEVEL ${event.value}`);
-        break;
       case "game_over":
         sfx.gameOver();
         break;
@@ -923,11 +1013,9 @@ function processEvents(events) {
     }
   }
   // The burst fanfare plays once per contact frame in the original
-  // (after the whole traversal), keyed on the frame's best chain. A frame that
-  // formed a chain plays only the pitched burst — the chainless se_c0 tick is
-  // suppressed exactly like the original's tracked maxima do.
+  // (after the whole traversal), keyed on the frame's best chain. A frame
+  // that formed a chain plays only the pitched burst.
   if (frameBurstCount > 0) sfx.burst(frameBurstCount - 1);
-  else if (frameContactCount > 0) sfx.touchTick();
 }
 
 function showReplayPosition(frame, totalFrames) {
@@ -953,6 +1041,7 @@ function syncUi() {
   if (!snapshot) return;
   soundtrack.update(snapshot);
   const state = snapshot.observation;
+  updateSequences(state);
   const replay = snapshot.replay;
   const replayMode = snapshot.mode === "replay";
   started ||= snapshot.running || state.tick > 0;
@@ -961,13 +1050,13 @@ function syncUi() {
   ui.paused.hidden = !started || snapshot.running || state.terminated || state.truncated;
   ui.over.hidden = replayMode ?
     !(replay.complete && replay.frame >= replay.total_frames) :
-    !(state.terminated || state.truncated);
+    (!(state.terminated || state.truncated) || !ending.revealed);
   if (!ui.over.hidden) {
     ui.finalTitle.textContent = replayMode ?
       snapshot.terminal_reason === "replay_exhausted" ? "Replay exhausted" : "Replay complete" :
-      snapshot.terminal_reason === "level_completed" ? "Level 100 complete" :
+      snapshot.terminal_reason === "level_completed" ? "Complete" :
         snapshot.terminal_reason === "time_limit" ? "Time limit" : "Game over";
-    ui.finalScore.textContent = `${String(state.score).padStart(8, "0")} · level ${state.level}`;
+    ui.finalScore.textContent = String(state.score).padStart(8, "0");
   }
   ui.saveReplay.hidden = replayMode || !snapshot.can_save_replay;
   once("againLabel", replayMode ? "new game" : "try again", (v) => { ui.again.textContent = v; });
