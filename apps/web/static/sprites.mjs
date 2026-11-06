@@ -49,9 +49,9 @@ export class SpriteBank {
       await Promise.all(names.map(name => new Promise(resolve => {
         const image = new Image();
         image.onload = () => {
+          this.sizes.set(name, {w: image.naturalWidth, h: image.naturalHeight});
           this.images.set(name, BLACK_KEYED.test(name) ?
             keyBlackPixels(image, THRESHOLD_KEYED.test(name) ? 100 : 0) : image);
-          this.sizes.set(name, {w: image.naturalWidth, h: image.naturalHeight});
           done += 1;
           onProgress?.(done, names.length);
           resolve();
@@ -81,9 +81,15 @@ export class SpriteBank {
     if (!canvas) {
       const image = this.images.get(name);
       if (!image) return null;
+      // Dimensions come from the sizes map, not naturalWidth: black-keyed
+      // sprites store a canvas in `images`, and a canvas has no naturalWidth
+      // (baking with it produced 0x0 variants whose drawImage threw
+      // InvalidStateError and killed the render loop).
+      const {w: naturalW, h: naturalH} = this.size(name);
+      if (!naturalW || !naturalH) return null;
       canvas = document.createElement("canvas");
-      canvas.width = image.naturalWidth;
-      canvas.height = image.naturalHeight;
+      canvas.width = naturalW;
+      canvas.height = naturalH;
       const c = canvas.getContext("2d");
       c.drawImage(image, 0, 0);
       c.globalCompositeOperation = "multiply";
@@ -111,6 +117,7 @@ export class SpriteBank {
     if (!source) return;
     const {w, h} = this.size(name);
     if (!w || !h) return;
+    if (!source.width || !source.height) return;
     ctx.save();
     ctx.translate(x, y);
     if (angle) ctx.rotate(angle);

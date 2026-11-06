@@ -4,19 +4,19 @@
 import {
   decodeReplayWord, encodeReplayWord, quantizeReplayPoint, REPLAY_TICK_MS,
   serializeReplay,
-} from "./replay.mjs?v=20261106b";
+} from "./replay.mjs?v=20261106c";
 
 const kinds = {weak: 1, strong: 2, both: 3};
 const FAST_FORWARD_STEPS = 4;
 
 async function loadModule() {
-  const factory = (await import("./irisu-wasm.js?v=20261106b")).default;
+  const factory = (await import("./irisu-wasm.js?v=20261106c")).default;
   try {
     return await factory();
   } catch (_) {
     // Fallback for contexts where the default fetch of the adjacent
     // irisu-wasm.wasm is unavailable (for example file:// or test hosts).
-    const url = new URL("./irisu-wasm.wasm?v=20261106b", import.meta.url);
+    const url = new URL("./irisu-wasm.wasm?v=20261106c", import.meta.url);
     let binary;
     if (typeof process !== "undefined" && process.versions?.node) {
       const {readFile} = await import("node:fs/promises");

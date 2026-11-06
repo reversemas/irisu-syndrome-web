@@ -1,16 +1,16 @@
-import {BrowserGame} from "./exact-runtime.js?v=20261106b";
-import {MetsuGame} from "./metsu-runtime.mjs?v=20261106b";
+import {BrowserGame} from "./exact-runtime.js?v=20261106c";
+import {MetsuGame} from "./metsu-runtime.mjs?v=20261106c";
 import {
   activatedTrailAlphas, colorFor, hasActivatedTrail,
-} from "./colors.mjs?v=20261106b";
+} from "./colors.mjs?v=20261106c";
 import {
   clampReplayScrubFrame, parseReplay, REPLAY_TICK_MS,
-} from "./replay.mjs?v=20261106b";
-import {RestartGate} from "./restart-gate.mjs?v=20261106b";
-import {createSoundtrack} from "./music.mjs?v=20261106b";
-import {offlineStatus} from "./offline.mjs?v=20261106b";
-import {SpriteBank, blockSpriteName, blockRenderState} from "./sprites.mjs?v=20261106b";
-import {createSfx} from "./sfx.mjs?v=20261106b";
+} from "./replay.mjs?v=20261106c";
+import {RestartGate} from "./restart-gate.mjs?v=20261106c";
+import {createSoundtrack} from "./music.mjs?v=20261106c";
+import {offlineStatus} from "./offline.mjs?v=20261106c";
+import {SpriteBank, blockSpriteName, blockRenderState} from "./sprites.mjs?v=20261106c";
+import {createSfx} from "./sfx.mjs?v=20261106c";
 
 const canvas = document.querySelector("#game");
 const ctx = canvas.getContext("2d", {alpha: false});
@@ -796,43 +796,52 @@ function interpolatedBodies(now) {
 let dirty = true;
 
 function draw(now) {
+  // Reschedule first: one bad frame must never kill the render loop (a dead
+  // chain freezes the canvas while the simulation and sounds keep running).
+  requestAnimationFrame(draw);
   if (!dirty && !snapshot?.running && scorePopups.length === 0 &&
       burstEffects.length === 0 && popEffects.length === 0) {
-    requestAnimationFrame(draw);
     return;
   }
   dirty = false;
-  const state = snapshot?.observation;
-  drawBackdrop(state);
-  if (snapshot) {
-    drawWalls(state);
-    const bodies = interpolatedBodies(now);
-    (isSortedById(bodies) ? bodies : [...bodies].sort((a, b) => a.id - b.id))
-      .forEach((body) => drawBody(body, now));
-    drawBurstEffects(now);
-    drawScorePopups(now);
-    drawHud(state);
-  }
-  if (aim.visible) {
-    if (assetsReady && sprites.has("pointer")) {
-      // The original cursor sprite is additive art: black pixels turn
-      // invisible, the white arrow glows (DX_BLENDMODE_ADD).
-      sprites.draw(ctx, "pointer", aim.x, aim.y, {additive: true});
-    } else {
-      ctx.save();
-      ctx.strokeStyle = "#ece8dd";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(aim.x, aim.y, 9, 0, Math.PI * 2);
-      ctx.moveTo(aim.x - 15, aim.y); ctx.lineTo(aim.x - 5, aim.y);
-      ctx.moveTo(aim.x + 5, aim.y); ctx.lineTo(aim.x + 15, aim.y);
-      ctx.moveTo(aim.x, aim.y - 15); ctx.lineTo(aim.x, aim.y - 5);
-      ctx.moveTo(aim.x, aim.y + 5); ctx.lineTo(aim.x, aim.y + 15);
-      ctx.stroke();
-      ctx.restore();
+  try {
+    const state = snapshot?.observation;
+    drawBackdrop(state);
+    if (snapshot) {
+      drawWalls(state);
+      const bodies = interpolatedBodies(now);
+      (isSortedById(bodies) ? bodies : [...bodies].sort((a, b) => a.id - b.id))
+        .forEach((body) => drawBody(body, now));
+      drawBurstEffects(now);
+      drawScorePopups(now);
+      drawHud(state);
+    }
+    if (aim.visible) {
+      if (assetsReady && sprites.has("pointer")) {
+        // The original cursor sprite is additive art: black pixels turn
+        // invisible, the white arrow glows (DX_BLENDMODE_ADD).
+        sprites.draw(ctx, "pointer", aim.x, aim.y, {additive: true});
+      } else {
+        ctx.save();
+        ctx.strokeStyle = "#ece8dd";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(aim.x, aim.y, 9, 0, Math.PI * 2);
+        ctx.moveTo(aim.x - 15, aim.y); ctx.lineTo(aim.x - 5, aim.y);
+        ctx.moveTo(aim.x + 5, aim.y); ctx.lineTo(aim.x + 15, aim.y);
+        ctx.moveTo(aim.x, aim.y - 15); ctx.lineTo(aim.x, aim.y - 5);
+        ctx.moveTo(aim.x, aim.y + 5); ctx.lineTo(aim.x, aim.y + 15);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  } catch (error) {
+    if (!window.__drawError) {
+      window.__drawError = error;
+      console.error("draw frame failed", error);
+      showToast(`render error: ${error.message}`, 5000);
     }
   }
-  requestAnimationFrame(draw);
 }
 
 function processEvents(events) {
