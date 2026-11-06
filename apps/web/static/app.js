@@ -1,16 +1,16 @@
-import {BrowserGame} from "./exact-runtime.js?v=20261106c";
-import {MetsuGame} from "./metsu-runtime.mjs?v=20261106c";
+import {BrowserGame} from "./exact-runtime.js?v=20261106d";
+import {MetsuGame} from "./metsu-runtime.mjs?v=20261106d";
 import {
   activatedTrailAlphas, colorFor, hasActivatedTrail,
-} from "./colors.mjs?v=20261106c";
+} from "./colors.mjs?v=20261106d";
 import {
   clampReplayScrubFrame, parseReplay, REPLAY_TICK_MS,
-} from "./replay.mjs?v=20261106c";
-import {RestartGate} from "./restart-gate.mjs?v=20261106c";
-import {createSoundtrack} from "./music.mjs?v=20261106c";
-import {offlineStatus} from "./offline.mjs?v=20261106c";
-import {SpriteBank, blockSpriteName, blockRenderState} from "./sprites.mjs?v=20261106c";
-import {createSfx} from "./sfx.mjs?v=20261106c";
+} from "./replay.mjs?v=20261106d";
+import {RestartGate} from "./restart-gate.mjs?v=20261106d";
+import {createSoundtrack} from "./music.mjs?v=20261106d";
+import {offlineStatus} from "./offline.mjs?v=20261106d";
+import {SpriteBank, blockSpriteName, blockRenderState} from "./sprites.mjs?v=20261106d";
+import {createSfx} from "./sfx.mjs?v=20261106d";
 
 const canvas = document.querySelector("#game");
 const ctx = canvas.getContext("2d", {alpha: false});

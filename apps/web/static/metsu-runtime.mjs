@@ -4,19 +4,19 @@
 import {
   decodeReplayWord, encodeReplayWord, quantizeReplayPoint, REPLAY_TICK_MS,
   serializeReplay,
-} from "./replay.mjs?v=20261106c";
+} from "./replay.mjs?v=20261106d";
 
 const kinds = {weak: 1, strong: 2, both: 3};
 const FAST_FORWARD_STEPS = 4;
 
 async function loadModule() {
-  const factory = (await import("./irisu-wasm.js?v=20261106c")).default;
+  const factory = (await import("./irisu-wasm.js?v=20261106d")).default;
   try {
     return await factory();
   } catch (_) {
     // Fallback for contexts where the default fetch of the adjacent
     // irisu-wasm.wasm is unavailable (for example file:// or test hosts).
-    const url = new URL("./irisu-wasm.wasm?v=20261106c", import.meta.url);
+    const url = new URL("./irisu-wasm.wasm?v=20261106d", import.meta.url);
     let binary;
     if (typeof process !== "undefined" && process.versions?.node) {
       const {readFile} = await import("node:fs/promises");
@@ -322,6 +322,10 @@ export class MetsuGame {
     this.createSimulator(this.seed);
     const state = JSON.parse(this.resetCall(this.simulator, this.seed));
     this.observation = state.observation;
+    // Auto-play like the exact (v86) runtime does, so choosing a replay file
+    // starts it immediately instead of sitting paused at frame 0.
+    this.running = replay.frameCount > 0;
+    this.deadline = this.now() + this.replayInterval();
     this.emit();
     return true;
   }

@@ -1,22 +1,25 @@
 import {
   OPCODE, decodeHello, decodeObservation, decodePaddedEvents, decodePaddedStepMetadata,
   decodeReset, decodeStep, encodeReset, encodeStep,
-} from "./exact-codec.mjs?v=20261106c";
+} from "./exact-codec.mjs?v=20261106d";
 import {
   ReplayObservationCache, decodeReplayWord, encodeReplayWord,
   quantizeReplayPoint, serializeReplay, REPLAY_TICK_MS,
-} from "./replay.mjs?v=20261106c";
+} from "./replay.mjs?v=20261106d";
 
 const kinds = {weak: 1, strong: 2, both: 3};
 const FAST_FORWARD_TICKS = 80;
 const FAST_FORWARD_WAIT_TICKS = 20;
 const REPLAY_SPEEDS = new Set([1, 2, 4, 8]);
+// One replay-preparation step normally takes well under a second even on a
+// modest laptop. Thirty seconds of silence means the guest is gone.
+const REPLAY_STEP_TIMEOUT_MS = 30_000;
 
 export class ExactWorkerClient {
   static async create({WorkerClass = globalThis.Worker, timeoutMs = 60000,
     onProgress = () => {}} = {}) {
     if (!WorkerClass) throw new Error("Web Workers are unavailable");
-    const worker = new WorkerClass(new URL("./exact-worker.js?v=20261106c", import.meta.url));
+    const worker = new WorkerClass(new URL("./exact-worker.js?v=20261106d", import.meta.url));
     const client = new ExactWorkerClient(worker, timeoutMs, onProgress);
     let timer;
     try {
@@ -551,8 +554,26 @@ export class BrowserGame {
       for (let index = 0; index < this.replayData.frameCount; index++) {
         if (this.closed || epoch !== this.epoch || this.mode !== "replay") return;
         const frame = decodeReplayWord(this.replayData.words[index]);
-        const raw = await this.client.stepPaddedRaw(
-          frame.kind, frame.x, frame.y, index < 2);
+        // Watchdog: a hung guest (memory pressure, lost virtio response) used
+        // to leave this await pending forever — playback then froze at the
+        // compute frontier with only a "Buffering" label and no way out.
+        // Fail loudly instead so the UI shows the real problem.
+        let watchdog;
+        const timeout = new Promise((_, reject) => {
+          watchdog = setTimeout(() => reject(new Error(
+            `the exact engine stopped responding while preparing replay frame ${index + 1}`)),
+          REPLAY_STEP_TIMEOUT_MS);
+        });
+        timeout.catch(() => {});
+        let raw;
+        try {
+          raw = await Promise.race([
+            this.client.stepPaddedRaw(frame.kind, frame.x, frame.y, index < 2),
+            timeout,
+          ]);
+        } finally {
+          clearTimeout(watchdog);
+        }
         if (this.closed || epoch !== this.epoch || this.mode !== "replay") return;
         const metadata = decodePaddedStepMetadata(raw);
         while (true) {
