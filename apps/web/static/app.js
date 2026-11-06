@@ -609,8 +609,9 @@ let gaugeGradient = null;
 let lifeGradient = null;
 
 function drawLifeGauge(state) {
-  // Metsu side: the INI draws a vertical game_life gauge at x=34,y=100 with a
-  // white track and a bright blue fill (0x3f3fd9), plus a numeric readout.
+  // Metsu side: a vertical game_life gauge at x=34,y=100 with a white track
+  // and a bright blue fill (0x3f3fd9). No numeric readout — the fill height
+  // alone communicates the remaining life.
   const x = 34, y = 100, w = 20, h = 350;
   ctx.fillStyle = "#ffffff2e";
   ctx.fillRect(x, y, w, h);
@@ -624,17 +625,6 @@ function drawLifeGauge(state) {
   ctx.fillRect(x, y + h * (1 - ratio), w, h * ratio);
   ctx.fillStyle = "#ffffff26";
   ctx.fillRect(x, y, 3, h);
-  ctx.save();
-  ctx.textAlign = "center";
-  ctx.font = "900 15px Georgia, serif";
-  ctx.strokeStyle = "#1b2440";
-  ctx.lineWidth = 4;
-  ctx.lineJoin = "round";
-  const text = String(Math.max(0, state.gauge));
-  ctx.strokeText(text, x + w / 2, y - 10);
-  ctx.fillStyle = "#cfd8ff";
-  ctx.fillText(text, x + w / 2, y - 10);
-  ctx.restore();
 }
 
 function cachedStrip(strip, key, render) {
@@ -679,9 +669,39 @@ function drawScoreDigits(c, value, x, y, align) {
   outlinedText(String(Math.max(0, value)).padStart(8, "0"), x, y, 26, align, c);
 }
 
+// Metsu draws the score as a vertical column on the right edge: one 27x33
+// glyph per row, the most significant digit on top, reading downward.
+const SCORE_COLUMN_X = 606;
+const SCORE_COLUMN_Y = 108;
+
+function drawScoreDigitsVertical(c, value, x, y) {
+  const text = String(Math.max(0, value)).padStart(8, "0");
+  const sheet = scoreSheetName();
+  if (assetsReady && sprites.has(sheet)) {
+    const image = sprites.variant(sheet, 255);
+    if (image) {
+      for (let i = 0; i < text.length; i++) {
+        const digit = text.charCodeAt(i) - 48;
+        if (digit < 0 || digit > 9) continue;
+        c.drawImage(image, digit * SCORE_DIGIT_W, 0, SCORE_DIGIT_W, SCORE_DIGIT_H,
+          x, y + i * SCORE_DIGIT_H, SCORE_DIGIT_W, SCORE_DIGIT_H);
+      }
+      return;
+    }
+  }
+  for (let i = 0; i < text.length; i++) {
+    outlinedText(text[i], x + SCORE_DIGIT_W / 2,
+      y + i * SCORE_DIGIT_H + SCORE_DIGIT_H / 2, 26, "center", c);
+  }
+}
+
 function drawHud(state) {
   if (gameMode === "metsu") {
     drawLifeGauge(state);
+    // The score column is plain sprite blits, cheap enough to skip the strip
+    // cache (which only covers the bottom 80px of the screen anyway).
+    drawScoreDigitsVertical(ctx, state.score, SCORE_COLUMN_X, SCORE_COLUMN_Y);
+    return;
   } else {
     const trackX = 151, trackY = 437, trackW = 312, trackH = 15;
     ctx.fillStyle = "#33161eaa";
@@ -698,15 +718,12 @@ function drawHud(state) {
     ctx.fillRect(trackX, trackY, trackW, 3);
   }
 
+  // Normal mode keeps the horizontal bottom-center score. The cache key is
+  // namespaced by mode so a mode switch always re-renders the strip.
   const digits = String(state.score).padStart(8, "0");
-  const metsuLayout = gameMode === "metsu";
-  // In Metsu the score relocates to the left side (beside the vertical life
-  // gauge), matching the original layout. The cache key is namespaced by mode
-  // so a mode switch always re-renders the strip.
-  cachedStrip(scoreStrip, (metsuLayout ? "m:" : "n:") + digits, (c) => {
+  cachedStrip(scoreStrip, "n:" + digits, (c) => {
     c.textBaseline = "middle";
-    drawScoreDigits(c, state.score, metsuLayout ? 78 : 320, 462,
-      metsuLayout ? "left" : "center");
+    drawScoreDigits(c, state.score, 320, 462, "center");
   });
 }
 
